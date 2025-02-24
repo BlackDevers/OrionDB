@@ -3,8 +3,7 @@ import WebSocket from "ws"
 function run() {
     let socket = new WebSocket('ws://localhost:5665/test_db@12345/users')
     socket.on('open', async (ws) => {
-        await insertMany(socket)
-        await search(socket)
+        search(socket)
     })
     
     socket.on('message', (data, buffer) => {
@@ -14,7 +13,7 @@ function run() {
 
 }
 
-async function insertMany(ws) {
+function insertMany(ws) {
     let req = {
         method: 'insertMany', 
         value: [{id: 1, test: 'test', cool: 1}, {id: 2, test: 'test2', cool: 2}]
@@ -22,14 +21,4 @@ async function insertMany(ws) {
     ws.send(JSON.stringify(req))
     return true
 }
-
-async function search(ws) {
-    let req = {
-        method: 'search', 
-        value: {id: 5}
-    }
-    ws.send(JSON.stringify(req))
-    return true
-}
-
 run()
