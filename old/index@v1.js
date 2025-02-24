@@ -4,11 +4,11 @@ import { Worker, isMainThread, parentPort } from 'worker_threads'
 import os from 'os'
 
 const SHARD_SIZE = 5000
-const CACHE_LIMIT = 25000
+const CACHE_LIMIT = 10
 const MAX_THREADS = Math.min(os.cpus().length, 8) + 2
 
 class OrionDB {
-    constructor(dbName, options = { strict: false }) {
+    constructor(dbName, options = { strictData: true }) {
         this.dbPath = path.join('./', dbName)
         this.options = options
         if (!fs.existsSync(this.dbPath)) fs.mkdirSync(this.dbPath)
@@ -25,8 +25,11 @@ class CollectionManager {
         this.options = options
         if (!fs.existsSync(this.collectionPath)) fs.mkdirSync(this.collectionPath)
         this.schemaPath = path.join(this.collectionPath, 'schema.json')
+        this.indexPath = path.join(this.collectionPath, 'index.json')
         if (!fs.existsSync(this.schemaPath)) fs.writeFileSync(this.schemaPath, JSON.stringify({}), 'utf-8')
+        if (!fs.existsSync(this.indexPath)) fs.writeFileSync(this.indexPath, JSON.stringify({}), 'utf-8')
         this.schema = JSON.parse(fs.readFileSync(this.schemaPath, 'utf-8'))
+        this.index = JSON.parse(fs.readFileSync(this.indexPath, 'utf-8'))
         this.cache = new Map()
     }
 
@@ -40,23 +43,11 @@ class CollectionManager {
     }
 
     readShard(shard) {
-        if (this.cache.has(shard)) return this.cache.get(shard)
-        const data = JSON.parse(fs.readFileSync(path.join(this.collectionPath, shard), 'utf-8'))
-        this.updateCache(shard, data)
-        return data
+        return JSON.parse(fs.readFileSync(path.join(this.collectionPath, shard), 'utf-8'))
     }
 
     writeShard(shard, data) {
         fs.writeFileSync(path.join(this.collectionPath, shard), JSON.stringify(data, null, 2), 'utf-8')
-        this.updateCache(shard, data)
-    }
-
-    updateCache(shard, data) {
-        if (this.cache.size >= CACHE_LIMIT) {
-            const oldestKey = this.cache.keys().next().value
-            this.cache.delete(oldestKey)
-        }
-        this.cache.set(shard, data)
     }
 
     createNewShard() {
@@ -65,26 +56,8 @@ class CollectionManager {
         return newShardName
     }
 
-    validateAndTransform(record) {
-        if(!this.options.strict || !this.schema || Object.keys(this.schema).length === 0) return record
-        let transformed = {}
-        for (let key in this.schema) {
-            let type = this.schema[key]
-            let value = record[key]
-            if (value === undefined) continue
-            if (type === "STRING") transformed[key] = String(value)
-            else if (type === "INT") transformed[key] = Number.isInteger(value) ? value : parseInt(value) || null
-            else if (type === "FLOAT") transformed[key] = parseFloat(value) || null
-            else if (type === "BOOLEAN") transformed[key] = Boolean(value) || value
-            else if (type === "JSON") transformed[key] = JSON.parse(value) || value
-            else if (type === "BINARY") transformed[key] = new Int32Array(value) || value
-            else transformed[key] = value
-        }
-        return transformed
-    }
-
     insert(record) {
-        return this.insertMany([record])
+        this.insertMany([record])
     }
 
     insertMany(records) {
@@ -93,7 +66,7 @@ class CollectionManager {
 
         while (records.length > 0) {
             let spaceLeft = SHARD_SIZE - data.length
-            let batch = records.splice(0, spaceLeft).map(r => this.validateAndTransform(r))
+            let batch = records.splice(0, spaceLeft)
             data.push(...batch)
             this.writeShard(latestShard, data)
             if (records.length > 0) {
@@ -101,8 +74,6 @@ class CollectionManager {
                 data = []
             }
         }
-
-        return data
     }
 
     async search(query) {
@@ -118,6 +89,7 @@ class CollectionManager {
         return results
     }
 
+    
     parallelSearch(query) {
         return new Promise((resolve, reject) => {
             const shards = this.getShardFiles()
@@ -150,14 +122,55 @@ class CollectionManager {
             }
         })
     }
+    
+    workerSearch(query) {
+        return new Promise((resolve) => {
+            const shards = this.getShardFiles()
+            let results = []
+            let completed = 0
+            
+            for (let shard of shards) {
+                const worker = new Worker(new URL(import.meta.url), { workerData: { shard, collectionPath: this.collectionPath, query } })
+                worker.on('message', (data) => {
+                    results.push(...data)
+                    if (++completed === shards.length) resolve(results)
+                })
+            }
+        })
+    }
+
+    match(field, regex) {
+        const results = []
+        for (let shard of this.getShardFiles()) {
+            let data = this.readShard(shard)
+            data.forEach((item, index) => {
+                if (regex.test(item[field])) {
+                    results.push({ shard, index, data: item })
+                }
+            })
+        }
+        return results
+    }
+
+    update(query, newValues) {
+        for (let shard of this.getShardFiles()) {
+            let data = this.readShard(shard)
+            let modified = false
+            for (let item of data) {
+                if (Object.keys(query).every(key => item[key] === query[key])) {
+                    Object.assign(item, newValues)
+                    modified = true
+                }
+            }
+            if (modified) this.writeShard(shard, data)
+        }
+    }
 
     remove(query) {
         for (let shard of this.getShardFiles()) {
             let data = this.readShard(shard)
             const filteredData = data.filter(item => !Object.keys(query).every(key => item[key] === query[key]))
-            if (filteredData.length !== data.length) {
-                this.writeShard(shard, filteredData)
-            }
+            if (filteredData.length !== data.length) this.writeShard(shard, filteredData)
         }
     }
 
@@ -166,5 +179,13 @@ class CollectionManager {
         return asSingleArray ? allData.flat() : allData
     }
 }
+
+// if (!isMainThread) {
+//     const { workerData } = await import('worker_threads')
+//     const { shard, collectionPath, query } = workerData
+//     const data = JSON.parse(fs.readFileSync(path.join(collectionPath, shard), 'utf-8'))
+//     const result = data.filter(item => Object.keys(query).every(key => item[key] === query[key]))
+//     parentPort.postMessage(result)
+// }
 
 export default OrionDB
