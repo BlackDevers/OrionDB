@@ -64,3 +64,37 @@ const db = new OrionDB('test_db', {strict:  0}).select('users', {threads:  0})
 
 ### Методы для работы с Orion
 Все доступные методы находятся по ссылке - [OrionDB Methods](https://github.com/BlackDevers/OrionDB/wiki/Methods)
+
+## ❤️ Мультиплатформа
+Вы можете использовать WebSocket для того, чтобы добиться эффективности не только в NodeJS, но и на других языках где поддерживается WebSocket.  
+Для того чтобы пользовать WebSocket, нам придется запустить сервис Orion:   
+```cmd
+npm start
+```
+Вы так же можете запустить его и отдельно другими методами, чтобы это работало в фоне, потому что мы можем запустить Orion Service напрямую (я рекомендую PM2):  
+```cmd
+node service.js
+```
+
+### Подключение к OrionDB
+Давайте рассмотрим подключение к серверу OrionDB в JavaScript: 
+```javascript
+new WebSocket('ws://localhost:5665/test_db@12345/users')
+```
+Orion Service запускается на порту 5665 как указано в файле `.env`, но вы можете изменить порт для запуска сервиса, так же как и пароль для подключения.  
+
+Разберем параметры запроса
+- test_db@12345 || test_db - имя базы данных / @ - идентификатор для разделения данных / 12345 - пароль, который указан в `.env`
+- users - имя коллекции
+
+Общение с сервером выполняется благодаря JSON-объектам, мы отдаем и принимаем JSON данные. В случае когда мы принимаем данные, нам нужно распарсить их из строки, в случае когда отправляем - переобразовываем в строку (stringify).  
+Пример запроса:
+```javascript
+    let req = {
+        method: 'insertMany', 
+        value: [{id: 1, test: 'test', cool: 1}, {id: 2, test: 'test2', cool: 2}]
+    }
+    ws.send(JSON.stringify(req))
+```
+
+WebSocket сервис принимает все доступные методы из [OrionDB Methods](https://github.com/BlackDevers/OrionDB/wiki/Methods) 
