@@ -83,6 +83,15 @@ function orionConnect(server) {
             }
         })
 
+        let ping = setInterval(() => {
+            ws.send((message('ping', 1)))
+        }, 10000)
+
+        ws.on('close', e => {
+            ws.close()
+            return false
+        })
+
         ws.send(message('connection', 'ok'))
     })
 }
