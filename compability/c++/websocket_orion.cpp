@@ -2,7 +2,7 @@
  * @ENCODING: UTF-8
  *
  * @UNIX_COMPILATION_COMMAND: g++ -std=c++17 -o websocket_orion websocket_orion.cpp -lpthread
- * @WINDOWS_COMPILATION_COMMAND: cl /std:c++17 /EHsc /Fe:websocket_client.exe websocket_client.cpp ws2_32.lib
+ * @WINDOWS_COMPILATION_COMMAND: cl /std:c++17 /EHsc /Fe:websocket_orion.exe websocket_orion.cpp ws2_32.lib
  *
  * @AUTHORS: jxbc (original client), borz7zy (code refactor)
  * @DATE: 02-24-2025
@@ -14,6 +14,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <random>
 #include <nlohmann/json.hpp>
 
 #ifdef _WIN32
@@ -171,8 +172,38 @@ private:
     {
         std::string frame;
         frame.push_back(0x81);
-        frame.push_back(message.size());
-        frame.append(message);
+    
+        uint8_t maskKey[4];
+        std::random_device rd;
+        std::uniform_int_distribution<uint8_t> dist(0, 255);
+        for (int i = 0; i < 4; ++i)
+            maskKey[i] = dist(rd);
+    
+        size_t payloadLength = message.size();
+        if (payloadLength <= 125)
+        {
+            frame.push_back(0x80 | payloadLength);
+        }
+        else if (payloadLength <= 65535)
+        {
+            frame.push_back(0x80 | 126);
+            frame.push_back((payloadLength >> 8) & 0xFF);
+            frame.push_back(payloadLength & 0xFF);
+        }
+        else
+        {
+            frame.push_back(0x80 | 127);
+            for (int i = 7; i >= 0; --i)
+                frame.push_back((payloadLength >> (i * 8)) & 0xFF);
+        }
+
+        frame.append(reinterpret_cast<char *>(maskKey), 4);
+
+        for (size_t i = 0; i < payloadLength; ++i)
+        {
+            frame.push_back(message[i] ^ maskKey[i % 4]);
+        }
+    
         return frame;
     }
 
