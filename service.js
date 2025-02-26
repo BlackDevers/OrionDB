@@ -3,6 +3,7 @@ import { exec } from 'child_process'
 import OrionDB from './index.js'
 
 const port = process.env.SOCKET_PORT || 5665
+const PASSWORD = process.env.PASSWORD || '12345';
 
 let WebSocket
 
@@ -18,7 +19,7 @@ try {
 
 function socketInit() {
     let server = new WebSocket.WebSocketServer({port: port})
-    console.log('Socket Started At Port', port)
+    console.log('</>', 'Service Started At Port', port)
 
     orionConnect(server)
 }
@@ -27,17 +28,13 @@ function orionConnect(server) {
     server.on('connection', (ws, req, client) => {
         const path = req.url
         const match = path.match(/^\/([^@]+)@([^/]+)\/(.+)$/)
-
         if(!match) {
-            ws.send('Error: Invalid format');
-            ws.close()
-            return false
-        }
-        const dbname = match[1]
-        const passw = match[2]
-        const col = match[3]
+            return ws.close(1000, 'Invalid format');
+        } 
 
-        if(passw !== process.env.PASSWORD) {
+        const [_, dbname, passw, col] = match
+
+        if(passw !== PASSWORD) {
             ws.send(message('error', 'wrong password'));
             ws.close()
             return false
@@ -46,40 +43,23 @@ function orionConnect(server) {
         const db = new OrionDB(dbname).select(col)
 
         ws.on('message', async (data, binary) => {
-            data = JSON.parse(data) || null
-            if(!data) {
-                ws.send(message('error', 'data is null'))
-                return false
+            try {
+                data = JSON.parse(data) || null
+                if(!data || !('method' in data)) {
+                    return ws.send(message('error', 'Data is null or method'))
+                }
+            } catch(e) {
+                return ws.send(message('error', e.message))
             }
 
-            if('method' in data) {
-                if(data.method == 'insert') {
-                    let res = db.insert(data.value)
-                    ws.send(message('insert', res))
-                }
-                if(data.method == 'insertMany') {
-                     db.insertMany(data.value)
-                    ws.send(message('insertMany', 'insertMany()'))
-                }
-                if(data.method == 'update') {
-                    if(data.value.length < 1) {
-                        return ws.send(message('error', 'value required: [{}, {}]'))
-                    }
-                    db.update(data.value[0], data.value[1])
-                    ws.send(message('update', 'update()'))
-                }
-                if(data.method == 'remove') {
-                    db.update(data.value)
-                    ws.send(message('remove', 'remove()'))
-                }
-                if(data.method == 'get') {
-                    let res = db.get(data.value)
-                    ws.send(message('get', res))
-                }
-                if(data.method == 'search') {
-                    let res = await db.search(data.value)
-                    ws.send(message('search', res))
-                }
+            const method = getMethods(data, db)[data.method]
+            if(!method) {return ws.send(message('error', `Unknown method: ${data.method}`))}
+
+            try {
+                const result = await method(data)
+                ws.send(message(data.method, result))
+            } catch(e) {
+                ws.send(message('error', `Method ${data.method} failed: ${e.message}`))
             }
         })
 
@@ -87,13 +67,20 @@ function orionConnect(server) {
             ws.send((message('ping', 1)))
         }, 10000)
 
-        ws.on('close', e => {
-            ws.close()
-            return false
-        })
-
+        ws.on('close', e => { clearInterval(ping) })
         ws.send(message('connection', 'ok'))
     })
+}
+
+function getMethods(data, db) {
+    return {
+            insert: (data) => db.insert(data.value),
+            insertMany: (data) => db.insertMany(data.value),
+            update: (data) => db.update(data.value[0], data.value[1]),
+            remove: (data) => db.remove(data.value),
+            get: (data) => db.get(data.value ?? true),
+            search: async (data) => await db.search(data.value),
+    }
 }
 
 function message(type, text) {

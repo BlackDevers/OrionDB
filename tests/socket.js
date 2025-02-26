@@ -3,7 +3,7 @@ import WebSocket from "ws"
 function run() {
     let socket = new WebSocket('ws://localhost:5665/test_db@12345/users')
     socket.on('open', async (ws) => {
-        search(socket)
+        insertMany(socket)
     })
     
     socket.on('message', (data, buffer) => {

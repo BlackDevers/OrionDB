@@ -150,6 +150,33 @@ class CollectionManager {
             }
         })
     }
+    
+    match(field, regex) {
+        const results = [];
+        for (let shard of this.getShardFiles()) {
+            let data = this.readShard(shard);
+            data.forEach((item, index) => {
+                if (regex.test(item[field])) {
+                    results.push({ shard, index, data: item });
+                }
+            });
+        }
+        return results;
+    }
+
+    update(query, newValues) {
+        for (let shard of this.getShardFiles()) {
+            let data = this.readShard(shard);
+            let modified = false;
+            for (let item of data) {
+                if (Object.keys(query).every(key => item[key] === query[key])) {
+                    Object.assign(item, newValues);
+                    modified = true;
+                }
+            }
+            if (modified) this.writeShard(shard, data);
+        }
+    }
 
     remove(query) {
         for (let shard of this.getShardFiles()) {
